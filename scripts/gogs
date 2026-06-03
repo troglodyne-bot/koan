@@ -17,7 +17,9 @@ Supported commands:
     gogs issue list   --state STATE [--repo OWNER/REPO]
                       [--json FIELDS] [--limit N]
     gogs issue edit   NUMBER --body BODY [--repo OWNER/REPO]
-    gogs repo view   [--json FIELDS] [--jq FILTER]
+    gogs repo view        [--json FIELDS] [--jq FILTER]
+    gogs repo permissions [--repo OWNER/REPO] [--json FIELDS] [--jq FILTER]
+    gogs repo fork        [--repo OWNER/REPO] [--org ORGANIZATION]
     gogs api         ENDPOINT [-X METHOD] [--jq FILTER]
                      [--input -] [-F body=@-] [--paginate]
 
@@ -421,6 +423,50 @@ def cmd_repo_view(args: List[str]) -> None:
     _output_json_or_jq(normalised, json_fields, jq_filter)
 
 
+def cmd_repo_permissions(args: List[str]) -> None:
+    repo = _pop(args, "--repo")
+    json_fields = _pop(args, "--json") or ""
+    jq_filter = _pop(args, "--jq") or ""
+
+    if not repo:
+        repo = _repo_from_git_remote()
+    owner, repo_name = _split_repo(repo)
+    data = _request("GET", f"repos/{owner}/{repo_name}")
+
+    perms = data.get("permissions") or {}
+    # Normalise to a consistent shape regardless of Gogs version
+    normalised = {
+        "admin": bool(perms.get("admin", False)),
+        "push":  bool(perms.get("push", False)),
+        "pull":  bool(perms.get("pull", False)),
+    }
+
+    if jq_filter:
+        _out(_apply_jq(normalised, jq_filter))
+    elif json_fields:
+        fields = [f.strip() for f in json_fields.split(",")]
+        _out(json.dumps({k: v for k, v in normalised.items() if k in fields}, ensure_ascii=False))
+    else:
+        _out(json.dumps(normalised, ensure_ascii=False))
+
+
+def cmd_repo_fork(args: List[str]) -> None:
+    repo = _pop(args, "--repo")
+    org = _pop(args, "--org") or ""
+
+    if not repo:
+        repo = _repo_from_git_remote()
+    owner, repo_name = _split_repo(repo)
+
+    payload: Dict = {}
+    if org:
+        payload["organization"] = org
+
+    data = _request("POST", f"repos/{owner}/{repo_name}/forks", payload or None)
+    html_url = data.get("html_url") or f"{GOGS_HOST}/{data.get('full_name', '')}"
+    _out(html_url)
+
+
 def cmd_api(args: List[str]) -> None:
     endpoint = _positional(args) or _die("api requires an endpoint")
     method = _pop(args, "-X") or "GET"
@@ -510,6 +556,8 @@ def main() -> None:
         ("issue", "list"): cmd_issue_list,
         ("issue", "edit"): cmd_issue_edit,
         ("repo", "view"): cmd_repo_view,
+        ("repo", "permissions"): cmd_repo_permissions,
+        ("repo", "fork"): cmd_repo_fork,
         ("api", ""): cmd_api,
     }
 

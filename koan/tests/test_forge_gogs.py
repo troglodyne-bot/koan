@@ -312,8 +312,8 @@ class TestGogsForge_Issues:
             url = forge.issue_create_in_repo("alice/repo", "Bug found", "details")
         assert url == "https://git.example.com/alice/repo/issues/5"
 
-    def test_issue_create_raises_not_implemented(self, forge):
-        with pytest.raises(NotImplementedError):
+    def test_issue_create_raises_on_missing_cwd(self, forge):
+        with pytest.raises(RuntimeError, match="not a git repository"):
             forge.issue_create("title", "body")
 
 
@@ -491,3 +491,130 @@ class TestGetForgeGogs:
         from app.forge import get_forge
         forge = get_forge("my-gogs-project")
         assert isinstance(forge, GogsForge)
+
+
+# ---------------------------------------------------------------------------
+# scripts/gogs CLI — repo permissions and fork commands
+# ---------------------------------------------------------------------------
+
+import importlib.machinery
+import importlib.util
+import pathlib
+import sys
+
+
+def _load_gogs_script(monkeypatch):
+    """Load scripts/gogs as a module, with env vars set."""
+    monkeypatch.setenv("KOAN_GOGS_HOST", "https://git.example.com")
+    monkeypatch.setenv("KOAN_GOGS_TOKEN", "test-token")
+    script_path = str(pathlib.Path(__file__).resolve().parent.parent.parent / "scripts" / "gogs")
+    loader = importlib.machinery.SourceFileLoader("gogs_script", script_path)
+    spec = importlib.util.spec_from_file_location("gogs_script", script_path, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class TestGogsScriptRepoPermissions:
+    def test_permissions_outputs_json(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        repo_data = {
+            "permissions": {"admin": False, "push": True, "pull": True},
+            "name": "myrepo",
+        }
+        mock_resp = _mock_response(repo_data)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            mod.cmd_repo_permissions(["--repo", "alice/myrepo"])
+
+        out = capsys.readouterr().out
+        result = json.loads(out)
+        assert result == {"admin": False, "push": True, "pull": True}
+
+    def test_permissions_defaults_falsy_fields(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        # Gogs instance that omits permissions entirely
+        repo_data = {"name": "myrepo"}
+        mock_resp = _mock_response(repo_data)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            mod.cmd_repo_permissions(["--repo", "alice/myrepo"])
+
+        out = capsys.readouterr().out
+        result = json.loads(out)
+        assert result == {"admin": False, "push": False, "pull": False}
+
+    def test_permissions_jq_filter(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        repo_data = {"permissions": {"admin": True, "push": True, "pull": True}}
+        mock_resp = _mock_response(repo_data)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            mod.cmd_repo_permissions(["--repo", "alice/myrepo", "--jq", ".admin"])
+
+        out = capsys.readouterr().out.strip()
+        assert out == "True"
+
+    def test_permissions_json_field_filter(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        repo_data = {"permissions": {"admin": False, "push": True, "pull": True}}
+        mock_resp = _mock_response(repo_data)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            mod.cmd_repo_permissions(["--repo", "alice/myrepo", "--json", "push,pull"])
+
+        out = capsys.readouterr().out
+        result = json.loads(out)
+        assert result == {"push": True, "pull": True}
+        assert "admin" not in result
+
+
+class TestGogsScriptRepoFork:
+    def test_fork_returns_html_url(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        fork_data = {
+            "html_url": "https://git.example.com/bob/myrepo",
+            "full_name": "bob/myrepo",
+        }
+        mock_resp = _mock_response(fork_data)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            mod.cmd_repo_fork(["--repo", "alice/myrepo"])
+
+        out = capsys.readouterr().out.strip()
+        assert out == "https://git.example.com/bob/myrepo"
+
+    def test_fork_with_org(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        fork_data = {
+            "html_url": "https://git.example.com/myorg/myrepo",
+            "full_name": "myorg/myrepo",
+        }
+        mock_resp = _mock_response(fork_data)
+
+        captured_req = {}
+
+        def _fake_urlopen(req, timeout=30):
+            captured_req["data"] = req.data
+            return mock_resp
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            mod.cmd_repo_fork(["--repo", "alice/myrepo", "--org", "myorg"])
+
+        out = capsys.readouterr().out.strip()
+        assert out == "https://git.example.com/myorg/myrepo"
+        body = json.loads(captured_req["data"])
+        assert body["organization"] == "myorg"
+
+    def test_fork_falls_back_to_full_name(self, monkeypatch, capsys):
+        mod = _load_gogs_script(monkeypatch)
+
+        # Gogs instance that doesn't return html_url
+        fork_data = {"full_name": "bob/myrepo"}
+        mock_resp = _mock_response(fork_data)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            mod.cmd_repo_fork(["--repo", "alice/myrepo"])
+
+        out = capsys.readouterr().out.strip()
+        assert out == "https://git.example.com/bob/myrepo"

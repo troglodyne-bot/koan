@@ -41,7 +41,7 @@ def handle(ctx):
     parsed = parse.urlparse(url)
     host = parsed.netloc
     if not host:
-        return f"Could not determine hostname of your git server"
+        return "Could not determine hostname of your git server"
 
     if not project_name:
         project_name = repo
