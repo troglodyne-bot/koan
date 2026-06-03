@@ -119,6 +119,7 @@ class GogsForge(ForgeProvider):
             ValueError: If ``repo`` is not provided.
             RuntimeError: If the API call fails.
         """
+        self._require_token()
         owner, repo_name = _split_repo(repo)
         payload: Dict = {"title": title, "body": body or ""}
         if base:
@@ -192,6 +193,7 @@ class GogsForge(ForgeProvider):
     ) -> str:
         # Translate git remote in cwd to 'repo' string to pass to issue_create_in_repo
         # XXX A bit wasteful to split/unsplit but beats refactoring
+        self._require_token()
         result = _owner_repo_from_git_remote(cwd)
         if not result:
             raise RuntimeError(f"{cwd} is not a git repository, or has no remotes configured, so we cannot figure out how to file an issue thereupon")
@@ -218,6 +220,7 @@ class GogsForge(ForgeProvider):
         Returns:
             URL of the created issue.
         """
+        self._require_token()
         owner, repo_name = _split_repo(repo)
         payload: Dict = {"title": title, "body": body or ""}
         # Gogs label API uses IDs, not names — skip label resolution for now.
@@ -306,6 +309,9 @@ class GogsForge(ForgeProvider):
                 "(e.g. https://git.example.com)."
             )
 
+    # CUD is one of the few times we know for a fact we will need a token
+    # We might also need one for read in the case of private repos though.
+    # In those cases we will have to fall back to enjoying a 403 from the API.
     def _require_token(self) -> None:
         from app.gogs_auth import get_gogs_token
         if not get_gogs_token():
@@ -338,7 +344,6 @@ class GogsForge(ForgeProvider):
             RuntimeError: On HTTP error or if KOAN_GOGS_HOST is not set.
         """
         self._require_host()
-        self._require_token()
 
         from app.gogs_auth import get_gogs_token
 
@@ -372,7 +377,6 @@ class GogsForge(ForgeProvider):
     def _raw_get(self, url: str, timeout: int = 30) -> str:
         """Fetch a raw URL (non-JSON) with token auth."""
         self._require_host()
-        self._require_token()
         from app.gogs_auth import get_gogs_token
 
         token = get_gogs_token()
