@@ -820,8 +820,8 @@ def main():
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
 
+                message_id = msg.get("message_id", 0)
                 if chat_id == CHAT_ID and text:
-                    message_id = msg.get("message_id", 0)
                     text = _strip_bot_mention_from_text(text, msg)
 
                 # Match against either: (a) the active provider's channel
