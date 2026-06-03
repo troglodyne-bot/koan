@@ -74,7 +74,7 @@ def detect_forge_from_url(url: str) -> ForgeProvider:
     from urllib.parse import urlparse
     parsed=urlparse(lower);
 
-    netloc = parsed.netloc();
+    netloc = parsed.netloc;
 
     # While this still allows for nefarious github.enterprise.whatever,
     # we presume that is intentional subdomain design in that case
