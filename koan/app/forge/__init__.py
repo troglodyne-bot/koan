@@ -68,12 +68,19 @@ def detect_forge_from_url(url: str) -> ForgeProvider:
 
     lower = url.lower()
 
-    if "github.com" in lower or "github.enterprise" in lower:
+    from urllib.parse import urlparse
+    parsed=urlparse(lower);
+
+    netloc = parsed.netloc();
+
+    # While this still allows for nefarious github.enterprise.whatever,
+    # we presume that is intentional subdomain design in that case
+    if netloc == "github.com" or "github.enterprise" in netloc:
         return GitHubForge()
 
     # Phase 2: self-hosted Gogs — detected by KOAN_GOGS_HOST match
     gogs_host = _gogs_host_for_detection()
-    if gogs_host and gogs_host in lower:
+    if netloc == gogs_host:
         from app.forge.gogs import GogsForge
         return GogsForge()
 
