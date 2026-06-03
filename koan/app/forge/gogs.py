@@ -303,6 +303,14 @@ class GogsForge(ForgeProvider):
                 "(e.g. https://git.example.com)."
             )
 
+    def _require_token(self) -> None:
+        from app.gogs_auth import get_gogs_token
+        if not get_gogs_token():
+            raise RuntimeError(
+                "GOGS token is not configured. "
+                "Set KOAN_GOGS_TOKEN to a personal access token."
+            )
+
     def _api(
         self,
         method: str,
@@ -327,6 +335,7 @@ class GogsForge(ForgeProvider):
             RuntimeError: On HTTP error or if KOAN_GOGS_HOST is not set.
         """
         self._require_host()
+        self._require_token()
 
         from app.gogs_auth import get_gogs_token
 
@@ -360,6 +369,7 @@ class GogsForge(ForgeProvider):
     def _raw_get(self, url: str, timeout: int = 30) -> str:
         """Fetch a raw URL (non-JSON) with token auth."""
         self._require_host()
+        self._require_token()
         from app.gogs_auth import get_gogs_token
 
         token = get_gogs_token()
