@@ -130,6 +130,8 @@ class GogsForge(ForgeProvider):
         html_url = data.get("html_url") or ""
         if not html_url:
             number = data.get("number")
+            if not number:
+                raise RuntimeError("Could not determine created PR's URL!")
             html_url = f"{self.base_url}/{owner}/{repo_name}/pulls/{number}"
         return html_url
 
