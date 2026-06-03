@@ -48,8 +48,8 @@ def get_forge(project_name: Optional[str] = None) -> ForgeProvider:
         # Unknown forge type — fall back to GitHub to avoid breaking callers.
         cls = GitHubForge
 
-    # TODO(Phase 2): pass base_url to all forge classes, not just GitHubForge.
-    if forge_url and cls is GitHubForge:
+    # If we have a forge url, pass it
+    if forge_url:
         return cls(base_url=forge_url)
     return cls()
 
