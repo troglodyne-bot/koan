@@ -5,14 +5,14 @@ obtain a ForgeProvider for a project without caring about the concrete type.
 
 Resolution order in get_forge(project_name):
   1. 'forge' field in projects.yaml for the project
-  2. Auto-detect from 'forge_url' / 'github_url' domain (Phase 4)
+  2. Auto-detect from 'forge_url' / 'github_url' domain
   3. Default: GitHubForge
 
 Phase roadmap:
-  Phase 1 (now): GitHub, base class, registry, factory
-  Phase 2a: GitLabForge
-  Phase 2b: GiteaForge (Codeberg / Forgejo)
-  Phase 3: forge_auth.py (per-forge auth abstraction)
+  Phase 1 (done): GitHub, base class, registry, factory
+  Phase 2 (done): GogsForge (self-hosted Gogs instances)
+  Phase 3a: GitLabForge
+  Phase 3b: GiteaForge (Codeberg / Forgejo)
   Phase 4: forge_url config field + auto-detection from git remotes
 """
 
@@ -74,11 +74,17 @@ def detect_forge_from_url(url: str) -> ForgeProvider:
     if "github.com" in lower or "github.enterprise" in lower:
         return GitHubForge()
 
-    # Phase 2a: gitlab.com and self-hosted GitLab
+    # Phase 2: self-hosted Gogs — detected by KOAN_GOGS_HOST match
+    gogs_host = _gogs_host_for_detection()
+    if gogs_host and gogs_host in lower:
+        from app.forge.gogs import GogsForge
+        return GogsForge()
+
+    # Phase 3a: gitlab.com and self-hosted GitLab
     # if "gitlab.com" in lower or _is_gitlab_url(lower):
     #     return GitLabForge()
 
-    # Phase 2b: Codeberg / Forgejo / Gitea
+    # Phase 3b: Codeberg / Forgejo / Gitea
     # if "codeberg.org" in lower or "gitea.io" in lower:
     #     return GiteaForge()
 
@@ -100,10 +106,12 @@ def _resolve_forge_config(project_name: Optional[str]) -> tuple:
         return DEFAULT_FORGE, None
 
     try:
-        from app.utils import get_koan_root
+        import os
         from app.projects_config import load_projects_config, get_project_config
 
-        koan_root = get_koan_root()
+        koan_root = os.environ.get("KOAN_ROOT", "")
+        if not koan_root:
+            return DEFAULT_FORGE, None
         config = load_projects_config(koan_root)
         if not config:
             return DEFAULT_FORGE, None
@@ -124,3 +132,15 @@ def _known_forge_types() -> set:
     """Return the set of currently recognised forge type strings."""
     from app.forge.registry import FORGE_TYPES
     return set(FORGE_TYPES.keys())
+
+
+def _gogs_host_for_detection() -> str:
+    """Return the lowercase Gogs host for URL detection, or empty string."""
+    try:
+        from app.gogs_auth import get_gogs_host
+        host = get_gogs_host()
+        # Strip scheme for comparison since lower() operates on the full URL
+        host = host.replace("https://", "").replace("http://", "")
+        return host.lower()
+    except Exception:
+        return ""
