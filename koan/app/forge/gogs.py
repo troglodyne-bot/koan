@@ -190,9 +190,11 @@ class GogsForge(ForgeProvider):
     ) -> str:
         # Translate git remote in cwd to 'repo' string to pass to issue_create_in_repo
         # XXX A bit wasteful to split/unsplit but beats refactoring
-        owner, repo_name = _owner_repo_from_git_remote(cwd)
-        if (not owner) or (not repo_name):
+        result = _owner_repo_from_git_remote(cwd)
+        if not result:
             raise RuntimeError(f"{cwd} is not a git repository, or has no remotes configured, so we cannot figure out how to file an issue thereupon")
+        # XXX Irritating bit of reassignment due to above call returning None rather than empty array, principle of least astonishment violation
+        owner, repo_name = result
         repo = f"{owner}/{repo_name}"
         return self.issue_create_in_repo(repo, title, body, labels)
 
