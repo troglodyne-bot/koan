@@ -118,6 +118,7 @@ def _resolve_forge_config(project_name: Optional[str]) -> tuple:
 
         koan_root = os.environ.get("KOAN_ROOT", "")
         if not koan_root:
+            log.warning("KOAN_ROOT not set — cannot resolve forge for project %r", project_name)
             return DEFAULT_FORGE, None
         config = load_projects_config(koan_root)
         if not config:
