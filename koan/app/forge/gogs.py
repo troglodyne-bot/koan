@@ -15,6 +15,7 @@ Not supported (Gogs API limitation or out of scope):
     FEATURE_PR_REVIEW_COMMENTS — Gogs PR review API is limited
 """
 
+import logging
 import json
 import urllib.error
 import urllib.parse
@@ -23,6 +24,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.forge.base import FEATURE_ISSUES, FEATURE_PR, ForgeProvider
 
+log = logging.getLogger(__name__)
 
 class GogsForge(ForgeProvider):
     """Forge implementation for self-hosted Gogs instances.
