@@ -188,14 +188,13 @@ class GogsForge(ForgeProvider):
         labels: Optional[List[str]] = None,
         cwd: Optional[str] = None,
     ) -> str:
-        # repo must be derivable from cwd; Gogs API requires explicit owner/repo.
-        # Callers that go through GogsForge always pass a repo param via
-        # the overloaded run_api() → issue creation should specify repo.
-        # For the common direct-create path, attempt to infer from git remote.
-        raise NotImplementedError(
-            "issue_create via GogsForge requires a repo argument; "
-            "use issue_create_in_repo() instead or pass repo via run_api()."
-        )
+        # Translate git remote in cwd to 'repo' string to pass to issue_create_in_repo
+        # XXX A bit wasteful to split/unsplit but beats refactoring
+        owner, repo_name = _owner_repo_from_git_remote(cwd)
+        if (not owner) or (not repo_name):
+            raise RuntimeError(f"{cwd} is not a git repository, or has no remotes configured, so we cannot figure out how to file an issue thereupon")
+        repo = f"{owner}/{repo_name}"
+        return self.issue_create_in_repo(repo, title, body, labels)
 
     def issue_create_in_repo(
         self,
