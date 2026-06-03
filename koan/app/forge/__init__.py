@@ -78,7 +78,7 @@ def detect_forge_from_url(url: str) -> ForgeProvider:
 
     # While this still allows for nefarious github.enterprise.whatever,
     # we presume that is intentional subdomain design in that case
-    if netloc == "github.com" or "github.enterprise" in netloc:
+    if netloc.endswith("github.com") or "github.enterprise" in netloc:
         return GitHubForge()
 
     # Phase 2: self-hosted Gogs — detected by KOAN_GOGS_HOST match
