@@ -150,4 +150,5 @@ def _gogs_host_for_detection() -> str:
         host = host.replace("https://", "").replace("http://", "")
         return host.lower()
     except Exception:
+        log.warning("Could not resolve Gogs host for URL detection", exc_info=True)
         return ""
