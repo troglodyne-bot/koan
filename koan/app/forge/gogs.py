@@ -283,7 +283,7 @@ class GogsForge(ForgeProvider):
                 if p_owner and p_name:
                     return f"{p_owner}/{p_name}"
         except RuntimeError:
-            log.warning("GOGS fork detection failed for %s: %s", project_path, exc);
+            log.warning("GOGS fork detection failed for %s: %s", project_path, exc)
             pass
         return None
 
