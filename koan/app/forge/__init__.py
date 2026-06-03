@@ -127,6 +127,7 @@ def _resolve_forge_config(project_name: Optional[str]) -> tuple:
         project_cfg = get_project_config(config, project_name)
         forge_type = project_cfg.get("forge", DEFAULT_FORGE)
         # Support both 'forge_url' (new) and 'github_url' (legacy alias)
+        # TODO make the rest of the project do a similar fallback scheme, no other place is this done
         forge_url = project_cfg.get("forge_url") or project_cfg.get("github_url")
         return forge_type, forge_url
 
