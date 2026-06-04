@@ -87,8 +87,8 @@ def check_config():
     # don't set them — defer the actual credential check to each
     # provider's own ``configure()`` (called from get_messaging_provider
     # below) so non-telegram providers don't get sys.exit(1)'d here.
-    from app.messaging import _resolve_provider_name
-    if _resolve_provider_name() == "telegram" and (not BOT_TOKEN or not CHAT_ID):
+    from app.messaging import resolve_provider_name
+    if resolve_provider_name() == "telegram" and (not BOT_TOKEN or not CHAT_ID):
         log("error", "Set KOAN_TELEGRAM_TOKEN and KOAN_TELEGRAM_CHAT_ID env vars.")
         sys.exit(1)
     if not INSTANCE_DIR.exists():
@@ -732,8 +732,8 @@ def main():
 
     setup_github_auth()
 
-    from app.messaging import _resolve_provider_name
-    provider_name = _resolve_provider_name()
+    from app.messaging import resolve_provider_name
+    provider_name = resolve_provider_name()
     print_bridge_banner(f"messaging bridge — {provider_name.lower()}")
 
     # Record startup time — used to ignore stale signal files in the
@@ -841,7 +841,13 @@ def main():
                 # channel_id but never CHAT_ID, so a CHAT_ID-only guard leaves
                 # message_id unbound and set_reply_context() below raises
                 # UnboundLocalError — crashing the bridge on every message.
-                if text and chat_id in (str(channel_id), str(CHAT_ID)):
+                #
+                # Empty strings are stripped from the match set and an empty
+                # chat_id is rejected: with CHAT_ID="" (normal for matrix/slack)
+                # a malformed update missing chat.id would otherwise satisfy
+                # `"" in (channel_id, "")` and slip past the channel filter.
+                valid_chat_ids = {str(channel_id), str(CHAT_ID)} - {""}
+                if text and chat_id and chat_id in valid_chat_ids:
                     message_id = msg.get("message_id", 0)
                     text = _strip_bot_mention_from_text(text, msg)
                     log("chat", f"Received: {text[:60]}")
