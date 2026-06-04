@@ -6,7 +6,12 @@ from unittest.mock import patch, MagicMock
 from skills.core.review.handler import (
     handle,
     _list_open_prs,
+    _list_gogs_open_prs,
     _handle_batch,
+    _handle_gogs_single,
+    _handle_gogs_batch,
+    _parse_gogs_repo_url,
+    _try_extract_gogs_pr_or_issue,
 )
 from app.github_skill_helpers import parse_repo_url, parse_limit
 from app.skills import SkillContext
@@ -290,3 +295,221 @@ class TestHandleRouting:
         handle(ctx)
 
         assert mock_single.call_args[1].get("urgent", False) is False
+
+    @patch(f"{_HANDLER}._handle_gogs_batch")
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_gogs_repo_url_routes_to_gogs_batch(self, mock_host, mock_gogs_batch):
+        mock_gogs_batch.return_value = "Queued 2 /review missions for Gogs repo owner/repo"
+        ctx = self._make_ctx("https://git.example.com/owner/repo")
+        result = handle(ctx)
+
+        mock_gogs_batch.assert_called_once()
+        assert result == "Queued 2 /review missions for Gogs repo owner/repo"
+
+    @patch(f"{_HANDLER}._handle_gogs_single")
+    @patch(f"{_HANDLER}._parse_gogs_repo_url", return_value=None)
+    @patch("app.gogs_url_parser.search_pr_url")
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_gogs_pr_url_routes_to_gogs_single(
+        self, mock_host, mock_search, mock_parse_repo, mock_gogs_single
+    ):
+        mock_search.return_value = ("owner", "repo", "42")
+        mock_gogs_single.return_value = "Review queued for Gogs PR #42"
+        ctx = self._make_ctx("https://git.example.com/owner/repo/pulls/42")
+        result = handle(ctx)
+
+        mock_gogs_single.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _parse_gogs_repo_url
+# ---------------------------------------------------------------------------
+
+class TestParseGogsRepoUrl:
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_plain_gogs_repo_url(self, mock_host):
+        result = _parse_gogs_repo_url("https://git.example.com/owner/repo")
+        assert result == ("https://git.example.com/owner/repo", "owner", "repo")
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_rejects_gogs_pr_url(self, mock_host):
+        result = _parse_gogs_repo_url("https://git.example.com/owner/repo/pulls/42")
+        assert result is None
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_rejects_gogs_issue_url(self, mock_host):
+        result = _parse_gogs_repo_url("https://git.example.com/owner/repo/issues/5")
+        assert result is None
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="")
+    def test_unconfigured_host_returns_none(self, mock_host):
+        result = _parse_gogs_repo_url("https://git.example.com/owner/repo")
+        assert result is None
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_rejects_subpath_names(self, mock_host):
+        result = _parse_gogs_repo_url("https://git.example.com/owner/pulls")
+        assert result is None
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_github_url_not_matched(self, mock_host):
+        result = _parse_gogs_repo_url("https://github.com/owner/repo")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _try_extract_gogs_pr_or_issue
+# ---------------------------------------------------------------------------
+
+class TestTryExtractGogsPrOrIssue:
+    @patch("app.gogs_url_parser.search_pr_url")
+    def test_extracts_pr(self, mock_search):
+        mock_search.return_value = ("owner", "repo", "42")
+        result = _try_extract_gogs_pr_or_issue("https://git.example.com/owner/repo/pulls/42")
+        assert result == ("owner", "repo", "42", "PR")
+
+    @patch("app.gogs_url_parser.search_pr_url", side_effect=ValueError("no match"))
+    @patch("app.gogs_url_parser.search_issue_url")
+    def test_extracts_issue_when_pr_fails(self, mock_issue, mock_pr):
+        mock_issue.return_value = ("owner", "repo", "5")
+        result = _try_extract_gogs_pr_or_issue("https://git.example.com/owner/repo/issues/5")
+        assert result == ("owner", "repo", "5", "issue")
+
+    @patch("app.gogs_url_parser.search_pr_url", side_effect=ValueError("no match"))
+    @patch("app.gogs_url_parser.search_issue_url", side_effect=ValueError("no match"))
+    def test_returns_none_on_no_match(self, mock_issue, mock_pr):
+        result = _try_extract_gogs_pr_or_issue("https://github.com/owner/repo/pull/42")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# _list_gogs_open_prs
+# ---------------------------------------------------------------------------
+
+class TestListGogsOpenPrs:
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    @patch("app.forge.gogs.GogsForge._api")
+    def test_returns_pr_dicts(self, mock_api, mock_host):
+        mock_api.return_value = [
+            {"number": 1, "title": "Fix bug", "html_url": "https://git.example.com/o/r/pulls/1"},
+            {"number": 2, "title": "Add feature", "html_url": "https://git.example.com/o/r/pulls/2"},
+        ]
+        result = _list_gogs_open_prs("o", "r")
+        assert len(result) == 2
+        assert result[0]["number"] == 1
+        assert result[0]["url"] == "https://git.example.com/o/r/pulls/1"
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    @patch("app.forge.gogs.GogsForge._api")
+    def test_builds_url_when_html_url_missing(self, mock_api, mock_host):
+        mock_api.return_value = [
+            {"number": 7, "title": "My PR"},
+        ]
+        result = _list_gogs_open_prs("o", "r")
+        assert result[0]["url"] == "https://git.example.com/o/r/pulls/7"
+
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    @patch("app.forge.gogs.GogsForge._api")
+    def test_non_list_response_returns_empty(self, mock_api, mock_host):
+        mock_api.return_value = {"error": "not found"}
+        result = _list_gogs_open_prs("o", "r")
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _handle_gogs_single
+# ---------------------------------------------------------------------------
+
+class TestHandleGogsSingle:
+    def _make_ctx(self, args=""):
+        return SkillContext(
+            koan_root=Path("/tmp/test"),
+            instance_dir=Path("/tmp/test/instance"),
+            command_name="review",
+            args=args,
+        )
+
+    @patch(f"{_HANDLER}.queue_github_mission", return_value=True)
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=("/path", "myrepo"))
+    @patch("app.gogs_url_parser.build_pr_url", return_value="https://git.example.com/o/r/pulls/42")
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_queues_pr_review(self, mock_host, mock_build, mock_resolve, mock_queue):
+        ctx = self._make_ctx()
+        result = _handle_gogs_single(ctx, "", "o", "r", "42", "PR", False)
+        assert "Review queued" in result
+        assert "PR #42" in result
+        mock_queue.assert_called_once()
+
+    @patch(f"{_HANDLER}.queue_github_mission", return_value=False)
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=("/path", "myrepo"))
+    @patch("app.gogs_url_parser.build_pr_url", return_value="https://git.example.com/o/r/pulls/42")
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_duplicate_returns_warning(self, mock_host, mock_build, mock_resolve, mock_queue):
+        ctx = self._make_ctx()
+        result = _handle_gogs_single(ctx, "", "o", "r", "42", "PR", False)
+        assert "Duplicate ignored" in result
+
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=(None, None))
+    @patch("app.gogs_url_parser.build_pr_url", return_value="https://git.example.com/o/r/pulls/42")
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_project_not_found(self, mock_host, mock_build, mock_resolve):
+        ctx = self._make_ctx()
+        result = _handle_gogs_single(ctx, "", "o", "r", "42", "PR", False)
+        assert "Could not find" in result
+
+    @patch(f"{_HANDLER}.queue_github_mission", return_value=True)
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=("/path", "myrepo"))
+    @patch("app.gogs_url_parser.build_pr_url", return_value="https://git.example.com/o/r/pulls/42")
+    @patch("app.gogs_auth.get_gogs_host", return_value="https://git.example.com")
+    def test_urgent_note_in_response(self, mock_host, mock_build, mock_resolve, mock_queue):
+        ctx = self._make_ctx()
+        result = _handle_gogs_single(ctx, "", "o", "r", "42", "PR", True)
+        assert "(priority)" in result
+
+
+# ---------------------------------------------------------------------------
+# _handle_gogs_batch
+# ---------------------------------------------------------------------------
+
+class TestHandleGogsBatch:
+    def _make_ctx(self, args=""):
+        return SkillContext(
+            koan_root=Path("/tmp/test"),
+            instance_dir=Path("/tmp/test/instance"),
+            command_name="review",
+            args=args,
+        )
+
+    @patch(f"{_HANDLER}.queue_github_mission", return_value=True)
+    @patch(f"{_HANDLER}._list_gogs_open_prs")
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=("/path", "myrepo"))
+    def test_queues_all_prs(self, mock_resolve, mock_list, mock_queue):
+        mock_list.return_value = [
+            {"number": 1, "url": "https://git.example.com/o/r/pulls/1"},
+            {"number": 2, "url": "https://git.example.com/o/r/pulls/2"},
+        ]
+        ctx = self._make_ctx()
+        result = _handle_gogs_batch(ctx, "", ("https://git.example.com/o/r", "o", "r"), False)
+        assert "2" in result
+        assert mock_queue.call_count == 2
+
+    @patch(f"{_HANDLER}._list_gogs_open_prs")
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=("/path", "myrepo"))
+    def test_no_prs_message(self, mock_resolve, mock_list):
+        mock_list.return_value = []
+        ctx = self._make_ctx()
+        result = _handle_gogs_batch(ctx, "", ("https://git.example.com/o/r", "o", "r"), False)
+        assert "No open PRs" in result
+
+    @patch(f"{_HANDLER}._list_gogs_open_prs", side_effect=RuntimeError("API error"))
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=("/path", "myrepo"))
+    def test_api_error_message(self, mock_resolve, mock_list):
+        ctx = self._make_ctx()
+        result = _handle_gogs_batch(ctx, "", ("https://git.example.com/o/r", "o", "r"), False)
+        assert "Failed to list Gogs PRs" in result
+
+    @patch(f"{_HANDLER}.resolve_project_for_repo", return_value=(None, None))
+    def test_project_not_found(self, mock_resolve):
+        ctx = self._make_ctx()
+        result = _handle_gogs_batch(ctx, "", ("https://git.example.com/o/r", "o", "r"), False)
+        assert "Could not find" in result
