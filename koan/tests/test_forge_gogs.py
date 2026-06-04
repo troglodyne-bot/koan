@@ -296,6 +296,78 @@ class TestGogsForge_PR:
             branches = forge.list_merged_prs("alice/repo")
         assert branches == []
 
+    def test_list_open_pr_branches_returns_head_refs(self, forge):
+        pulls = [
+            {"head": {"ref": "koan/a"}, "user": {"login": "bot"}},
+            {"head": {"ref": "koan/b"}, "user": {"login": "bot"}},
+        ]
+        mock_resp = _mock_response(pulls)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            branches = forge.list_open_pr_branches("alice/repo")
+        assert branches == ["koan/a", "koan/b"]
+
+    def test_list_open_pr_branches_filters_by_author(self, forge):
+        pulls = [
+            {"head": {"ref": "koan/a"}, "user": {"login": "bot"}},
+            {"head": {"ref": "human/x"}, "user": {"login": "alice"}},
+        ]
+        mock_resp = _mock_response(pulls)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            branches = forge.list_open_pr_branches("alice/repo", author="bot")
+        assert branches == ["koan/a"]
+
+    def test_list_open_pr_branches_empty_on_error(self, forge):
+        import urllib.error
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError("boom"),
+        ):
+            assert forge.list_open_pr_branches("alice/repo") == []
+
+    def test_find_pr_for_branch_returns_normalised_open_pr(self, forge):
+        pulls = [
+            {"number": 9, "state": "open", "merged": False,
+             "head": {"ref": "koan/feat"},
+             "html_url": "https://git.example.com/alice/repo/pulls/9"},
+        ]
+        mock_resp = _mock_response(pulls)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            pr = forge.find_pr_for_branch("alice/repo", "koan/feat")
+        assert pr["number"] == 9
+        assert pr["state"] == "OPEN"
+        assert pr["isDraft"] is False
+        assert pr["url"].endswith("/pulls/9")
+
+    def test_find_pr_for_branch_maps_merged_state(self, forge):
+        pulls = [
+            {"number": 4, "state": "closed", "merged": True,
+             "head": {"ref": "koan/done"}, "html_url": "u"},
+        ]
+        mock_resp = _mock_response(pulls)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            pr = forge.find_pr_for_branch("alice/repo", "koan/done")
+        assert pr["state"] == "MERGED"
+
+    def test_find_pr_for_branch_returns_none_when_absent(self, forge):
+        pulls = [{"number": 1, "state": "open", "head": {"ref": "other"}}]
+        mock_resp = _mock_response(pulls)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            assert forge.find_pr_for_branch("alice/repo", "koan/missing") is None
+
+    def test_repo_slug_parses_origin_remote(self, forge, monkeypatch):
+        monkeypatch.setattr(
+            "app.forge.gogs._owner_repo_from_git_remote",
+            lambda path: ("alice", "repo"),
+        )
+        assert forge.repo_slug("/p") == "alice/repo"
+
+    def test_repo_slug_none_when_no_remote(self, forge, monkeypatch):
+        monkeypatch.setattr(
+            "app.forge.gogs._owner_repo_from_git_remote",
+            lambda path: None,
+        )
+        assert forge.repo_slug("/p") is None
+
 
 # ---------------------------------------------------------------------------
 # GogsForge — issue operations
@@ -314,6 +386,15 @@ class TestGogsForge_Issues:
 
     def test_issue_create_raises_on_missing_cwd(self, forge):
         with pytest.raises(RuntimeError, match="not a git repository"):
+            forge.issue_create("title", "body")
+
+    def test_issue_create_raises_when_repo_unresolvable(self, forge):
+        # issue_create derives the repo from the git remote in ``cwd``; with
+        # no cwd (and thus no resolvable remote) it cannot determine where to
+        # file the issue and raises RuntimeError. Gogs *does* support issues
+        # (see test_supported_features_include_pr_and_issues), so this is no
+        # longer a NotImplementedError.
+        with pytest.raises(RuntimeError):
             forge.issue_create("title", "body")
 
 
