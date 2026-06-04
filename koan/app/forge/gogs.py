@@ -182,6 +182,82 @@ class GogsForge(ForgeProvider):
             if isinstance(pr, dict) and pr.get("merged")
         ]
 
+    def list_open_pr_branches(
+        self,
+        repo: str,
+        author: str = "",
+        cwd: Optional[str] = None,
+    ) -> List[str]:
+        """Return head-ref branch names of open PRs in ``repo``.
+
+        Best-effort: returns an empty list on any API error so callers can
+        treat branch-saturation accounting as degrade-gracefully.
+        """
+        try:
+            owner, repo_name = _split_repo(repo)
+            items = self._api(
+                "GET",
+                f"repos/{owner}/{repo_name}/pulls",
+                params={"state": "open", "limit": "50"},
+            )
+        except (RuntimeError, ValueError):
+            return []
+        if not isinstance(items, list):
+            return []
+        branches = set()
+        for pr in items:
+            if not isinstance(pr, dict):
+                continue
+            if author and _pr_author(pr) != author:
+                continue
+            ref = (pr.get("head") or {}).get("ref", "")
+            if ref:
+                branches.add(ref)
+        return sorted(branches)
+
+    def find_pr_for_branch(
+        self,
+        repo: str,
+        branch: str,
+        cwd: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Return the PR whose head ref is ``branch``, or None.
+
+        State is normalised to GitHub's upper-case convention
+        ("OPEN"/"CLOSED"/"MERGED") so callers can compare uniformly across
+        forges.  Gogs has no draft PRs, so ``isDraft`` is always False.
+        """
+        try:
+            owner, repo_name = _split_repo(repo)
+            items = self._api(
+                "GET",
+                f"repos/{owner}/{repo_name}/pulls",
+                params={"state": "all", "limit": "50"},
+            )
+        except (RuntimeError, ValueError):
+            return None
+        if not isinstance(items, list):
+            return None
+        for pr in items:
+            if not isinstance(pr, dict):
+                continue
+            if (pr.get("head") or {}).get("ref", "") != branch:
+                continue
+            if pr.get("merged"):
+                state = "MERGED"
+            elif (pr.get("state") or "").lower() == "closed":
+                state = "CLOSED"
+            else:
+                state = "OPEN"
+            return {
+                "number": pr.get("number"),
+                "state": state,
+                "isDraft": False,
+                "url": pr.get("html_url", ""),
+                "headRefName": branch,
+            }
+        return None
+
     # ------------------------------------------------------------------
     # Issue operations
     # ------------------------------------------------------------------
@@ -287,10 +363,17 @@ class GogsForge(ForgeProvider):
                 p_name = parent.get("name", "")
                 if p_owner and p_name:
                     return f"{p_owner}/{p_name}"
-        except RuntimeError:
-            log.warning("GOGS fork detection failed for %s: %s", project_path, exc)
-            pass
+        except (RuntimeError, KeyError, AttributeError, TypeError) as exc:
+            log.warning("Gogs fork detection failed for %s: %s", project_path, exc)
         return None
+
+    def repo_slug(self, project_path: str) -> Optional[str]:
+        """Return ``owner/repo`` parsed from the origin git remote, or None."""
+        result = _owner_repo_from_git_remote(project_path)
+        if not result:
+            return None
+        owner, repo_name = result
+        return f"{owner}/{repo_name}"
 
     # ------------------------------------------------------------------
     # Feature matrix
@@ -430,6 +513,21 @@ def _normalise_pr(data: Dict) -> Dict:
         "baseRefName": (data.get("base") or {}).get("ref", ""),
         "url": data.get("html_url", ""),
     }
+
+
+def _pr_author(pr: Dict) -> str:
+    """Return the login of a Gogs PR's author.
+
+    Gogs exposes the author under ``user`` (and historically ``poster``);
+    fall back across both so author filtering works on either API version.
+    """
+    for key in ("user", "poster"):
+        node = pr.get(key)
+        if isinstance(node, dict):
+            login = node.get("login") or node.get("username") or ""
+            if login:
+                return login
+    return ""
 
 
 def _owner_repo_from_git_remote(project_path: str) -> Optional[Tuple[str, str]]:

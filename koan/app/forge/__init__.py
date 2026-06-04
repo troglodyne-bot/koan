@@ -54,6 +54,26 @@ def get_forge(project_name: Optional[str] = None) -> ForgeProvider:
     return cls()
 
 
+def get_forge_for_path(project_path: str) -> ForgeProvider:
+    """Return a ForgeProvider for a project given only its local path.
+
+    Convenience wrapper for callers that have a checkout path but not the
+    project name.  Koan's workspace layout maps the directory basename to the
+    project key in projects.yaml, so the basename is used for config lookup.
+    Falls back to the default forge when the project is not configured.
+
+    Args:
+        project_path: Local path to the project repository.
+
+    Returns:
+        A ForgeProvider instance appropriate for the project.
+    """
+    import os
+
+    name = os.path.basename(os.path.normpath(project_path)) if project_path else None
+    return get_forge(name)
+
+
 def detect_forge_from_url(url: str) -> ForgeProvider:
     """Infer a ForgeProvider from a URL domain.
 
