@@ -6,15 +6,19 @@ from unittest.mock import patch, MagicMock
 from app.skills import SkillContext
 
 # The PR handler imports lazily inside handle():
-#   from app.github_url_parser import parse_pr_url → patch at app.github_url_parser.parse_pr_url
-#   from app.utils import resolve_project_path     → patch at app.utils.resolve_project_path
-#   from app.pr_review import run_pr_review        → patch at app.pr_review.run_pr_review
-#   from app.utils import get_known_projects       → patch at app.utils.get_known_projects
+#   from app.github_url_parser import parse_pr_url   → patch at app.github_url_parser.parse_pr_url
+#   from app.utils import resolve_project_path       → patch at app.utils.resolve_project_path
+#   from app.pr_review import run_pr_review          → patch at app.pr_review.run_pr_review
+#   from app.utils import get_known_projects         → patch at app.utils.get_known_projects
+#   from app.gogs_url_parser import search_pr_url   → patch at app.gogs_url_parser.search_pr_url
+#   from app.gogs_pr_review import run_pr_review_gogs → patch at app.gogs_pr_review.run_pr_review_gogs
 
 _P_PARSE = "app.github_url_parser.parse_pr_url"
 _P_RESOLVE = "app.utils.resolve_project_path"
 _P_REVIEW = "app.pr_review.run_pr_review"
 _P_KNOWN = "app.utils.get_known_projects"
+_P_GOGS_SEARCH = "app.gogs_url_parser.search_pr_url"
+_P_GOGS_REVIEW = "app.gogs_pr_review.run_pr_review_gogs"
 
 
 def _make_ctx(args="", instance_dir=None, send_message=None):
@@ -43,18 +47,21 @@ class TestPrInputValidation:
         assert "/pr" in result
 
     def test_invalid_url_rejected(self):
-        """Non-GitHub URL is rejected."""
+        """Non-GitHub and non-Gogs URL is rejected."""
         from skills.core.pr.handler import handle
-        ctx = _make_ctx("https://gitlab.com/owner/repo/merge_requests/1")
-        result = handle(ctx)
-        assert "No valid GitHub PR URL" in result
+        # search_pr_url raises ValueError when URL doesn't match Gogs host
+        with patch(_P_GOGS_SEARCH, side_effect=ValueError("no match")):
+            ctx = _make_ctx("https://gitlab.com/owner/repo/merge_requests/1")
+            result = handle(ctx)
+        assert "No valid PR URL" in result
 
     def test_plain_text_rejected(self):
         """Plain text without URL is rejected."""
         from skills.core.pr.handler import handle
-        ctx = _make_ctx("fix the bug please")
-        result = handle(ctx)
-        assert "No valid GitHub PR URL" in result
+        with patch(_P_GOGS_SEARCH, side_effect=ValueError("no match")):
+            ctx = _make_ctx("fix the bug please")
+            result = handle(ctx)
+        assert "No valid PR URL" in result
 
     def test_valid_url_extracted(self):
         """Valid GitHub PR URL is extracted from args."""
@@ -253,3 +260,102 @@ class TestPrReviewPipeline:
             ctx = _make_ctx("https://github.com/owner/repo/pull/1", send_message=None)
             result = handle(ctx)
         assert result is None
+
+# ---------------------------------------------------------------------------
+# Gogs URL support
+# ---------------------------------------------------------------------------
+
+class TestPrGogsSupport:
+    """Test that /pr routes Gogs URLs through the Gogs pipeline."""
+
+    def test_gogs_url_detected_and_routed(self):
+        """A Gogs PR URL is parsed and sent to run_pr_review_gogs."""
+        from skills.core.pr.handler import handle
+        send = MagicMock()
+        with patch(_P_GOGS_SEARCH, return_value=("owner", "myrepo", "7")), \
+             patch(_P_RESOLVE, return_value="/path/to/myrepo"), \
+             patch(_P_GOGS_REVIEW, return_value=(True, "Pushed")) as mock_gogs:
+            ctx = _make_ctx(
+                "https://git.example.com/owner/myrepo/pulls/7",
+                send_message=send,
+            )
+            result = handle(ctx)
+        mock_gogs.assert_called_once()
+        assert result is None  # sent via send_message
+
+    def test_gogs_sends_initial_notification(self):
+        """Gogs pipeline sends a 'starting' notification before review."""
+        from skills.core.pr.handler import handle
+        send = MagicMock()
+        with patch(_P_GOGS_SEARCH, return_value=("owner", "repo", "3")), \
+             patch(_P_RESOLVE, return_value="/path"), \
+             patch(_P_GOGS_REVIEW, return_value=(True, "Done")):
+            ctx = _make_ctx(
+                "https://git.example.com/owner/repo/pulls/3",
+                send_message=send,
+            )
+            handle(ctx)
+        first_msg = send.call_args_list[0][0][0]
+        assert "#3" in first_msg
+        assert "owner/repo" in first_msg
+
+    def test_gogs_failure_returns_error(self):
+        """Gogs review failure returns an error string."""
+        from skills.core.pr.handler import handle
+        with patch(_P_GOGS_SEARCH, return_value=("owner", "repo", "9")), \
+             patch(_P_RESOLVE, return_value="/path"), \
+             patch(_P_GOGS_REVIEW, return_value=(False, "Merge conflict")):
+            ctx = _make_ctx(
+                "https://git.example.com/owner/repo/pulls/9",
+                send_message=MagicMock(),
+            )
+            result = handle(ctx)
+        assert "failed" in result
+        assert "Merge conflict" in result
+
+    def test_gogs_unknown_project_returns_error(self):
+        """Gogs PR for unknown project returns a project-not-found error."""
+        from skills.core.pr.handler import handle
+        with patch(_P_GOGS_SEARCH, return_value=("owner", "unknown", "1")), \
+             patch(_P_RESOLVE, return_value=None), \
+             patch(_P_KNOWN, return_value=[("myproject", "/p")]):
+            ctx = _make_ctx("https://git.example.com/owner/unknown/pulls/1")
+            result = handle(ctx)
+        assert "Could not find" in result
+        assert "unknown" in result
+
+    def test_gogs_exception_returns_error(self):
+        """Exception from Gogs review pipeline returns error string."""
+        from skills.core.pr.handler import handle
+        with patch(_P_GOGS_SEARCH, return_value=("owner", "repo", "2")), \
+             patch(_P_RESOLVE, return_value="/path"), \
+             patch(_P_GOGS_REVIEW, side_effect=RuntimeError("API down")):
+            ctx = _make_ctx(
+                "https://git.example.com/owner/repo/pulls/2",
+                send_message=MagicMock(),
+            )
+            result = handle(ctx)
+        assert "error" in result.lower()
+        assert "API down" in result
+
+    def test_gogs_unconfigured_host_falls_through_to_error(self):
+        """If Gogs host is not configured, search raises ValueError → no-URL error."""
+        from skills.core.pr.handler import handle
+        with patch(_P_GOGS_SEARCH, side_effect=ValueError("KOAN_GOGS_HOST not set")):
+            ctx = _make_ctx("https://git.example.com/owner/repo/pulls/5")
+            result = handle(ctx)
+        assert "No valid PR URL" in result
+
+    def test_gogs_skill_dir_passed_to_review(self):
+        """skill_dir is forwarded to run_pr_review_gogs."""
+        from skills.core.pr.handler import handle
+        with patch(_P_GOGS_SEARCH, return_value=("owner", "repo", "1")), \
+             patch(_P_RESOLVE, return_value="/path"), \
+             patch(_P_GOGS_REVIEW, return_value=(True, "OK")) as mock_gogs:
+            ctx = _make_ctx(
+                "https://git.example.com/owner/repo/pulls/1",
+                send_message=MagicMock(),
+            )
+            handle(ctx)
+        kwargs = mock_gogs.call_args[1]
+        assert "pr" in str(kwargs["skill_dir"])
