@@ -1547,6 +1547,31 @@ class TestMainLoop:
     @patch("app.awake.write_heartbeat")
     @patch("app.awake._flush_outbox_async")
     @patch("app.awake.handle_message")
+    @patch("app.awake.get_updates")
+    @patch("app.awake.check_config")
+    @patch("app.awake.CHAT_ID", TEST_CHAT_ID)
+    @patch("app.awake.time.sleep", side_effect=StopIteration)
+    def test_main_update_without_update_id_does_not_crash(
+        self, mock_sleep, mock_config, mock_updates, mock_handle, mock_flush, mock_heartbeat
+    ):
+        """An update lacking update_id (non-Telegram providers) must not crash
+        the loop. A KeyError here would take down main(), the supervisor would
+        restart the bridge, the same poison message would be re-delivered, and
+        the bridge would crash-loop forever. The message is still dispatched."""
+        from app.awake import main
+        mock_updates.return_value = [
+            {"message": {"text": "hi from matrix", "chat": {"id": self.TEST_CHAT_ID}}}
+        ]
+        # Loop must reach the sleep() (StopIteration) rather than raising KeyError.
+        with pytest.raises(StopIteration):
+            main()
+        mock_handle.assert_called_once_with("hi from matrix")
+        mock_flush.assert_called_once()
+        mock_heartbeat.assert_called()
+
+    @patch("app.awake.write_heartbeat")
+    @patch("app.awake._flush_outbox_async")
+    @patch("app.awake.handle_message")
     @patch("app.awake.get_updates", side_effect=KeyboardInterrupt)
     @patch("app.awake.check_config")
     def test_main_ctrl_c_exits_gracefully(self, mock_config, mock_updates,

@@ -806,7 +806,16 @@ def main():
                 continue
 
             for update in updates:
-                offset = update["update_id"] + 1
+                # Telegram uses update_id for offset-based pagination.
+                # Other providers (matrix, slack, discord) manage their own
+                # cursor internally and may hand us updates that don't carry
+                # this key. Never let a missing/malformed update_id crash the
+                # bridge: a single non-conforming update would otherwise take
+                # down main(), the supervisor would restart us, the same
+                # poison message would be re-delivered, and we'd crash-loop
+                # forever (see logs/awake.log KeyError: 'update_id').
+                if "update_id" in update:
+                    offset = update["update_id"] + 1
 
                 # Handle reaction updates
                 if "message_reaction" in update:
