@@ -461,3 +461,82 @@ class TestSkillMd:
 
     def test_skill_handler_exists(self):
         assert HANDLER_PATH.exists()
+
+
+# ---------------------------------------------------------------------------
+# handle() — Gogs PR support
+# ---------------------------------------------------------------------------
+
+class TestGogsRebase:
+    """Gogs PR URLs trigger the Gogs ownership check path."""
+
+    GOGS_URL = "https://git.example.com/alice/myrepo/pulls/7"
+
+    def _mock_gogs_env(self):
+        return patch.dict("os.environ", {"KOAN_GOGS_HOST": "https://git.example.com"})
+
+    def test_gogs_pr_url_queues_mission(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch("app.utils.insert_pending_mission") as mock_insert, \
+             patch("app.forge.gogs.GogsForge._api", return_value={
+                 "number": 7,
+                 "title": "test",
+                 "state": "open",
+                 "head": {"ref": "koan/some-fix"},
+                 "base": {"ref": "main"},
+                 "html_url": "https://git.example.com/alice/myrepo/pulls/7",
+             }):
+            result = handler.handle(ctx)
+            assert "queued" in result.lower()
+            assert "#7" in result
+            mock_insert.assert_called_once()
+
+    def test_gogs_pr_rejects_foreign_branch(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch("app.config.is_rebase_foreign_prs_allowed", return_value=False), \
+             patch("app.forge.gogs.GogsForge._api", return_value={
+                 "number": 7,
+                 "title": "test",
+                 "state": "open",
+                 "head": {"ref": "human/some-fix"},
+                 "base": {"ref": "main"},
+                 "html_url": "https://git.example.com/alice/myrepo/pulls/7",
+             }):
+            result = handler.handle(ctx)
+            assert "❌" in result
+            assert "Not my PR" in result
+
+    def test_gogs_pr_accepts_foreign_when_config_allows(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch.object(handler, "is_rebase_foreign_prs_allowed", return_value=True), \
+             patch("app.utils.insert_pending_mission") as mock_insert, \
+             patch("app.forge.gogs.GogsForge._api", return_value={
+                 "number": 7,
+                 "title": "test",
+                 "state": "open",
+                 "head": {"ref": "human/some-fix"},
+                 "base": {"ref": "main"},
+                 "html_url": "https://git.example.com/alice/myrepo/pulls/7",
+             }):
+            result = handler.handle(ctx)
+            assert "queued" in result.lower()
+            mock_insert.assert_called_once()
+
+    def test_gogs_forge_error_returns_error(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch("app.forge.gogs.GogsForge._api", side_effect=RuntimeError("API down")):
+            result = handler.handle(ctx)
+            assert "❌" in result
+            assert "ownership" in result.lower() or "Failed" in result

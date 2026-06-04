@@ -180,3 +180,57 @@ class TestSkillMd:
         from app.skills import parse_skill_md
         skill = parse_skill_md(Path(__file__).parent.parent / "skills" / "core" / "review_rebase" / "SKILL.md")
         assert skill.group == "pr"
+
+
+# ---------------------------------------------------------------------------
+# handle() — Gogs PR support
+# ---------------------------------------------------------------------------
+
+class TestGogsReviewRebase:
+    """Gogs PR URLs trigger the Gogs queue path for both review + rebase."""
+
+    GOGS_URL = "https://git.example.com/alice/myrepo/pulls/7"
+
+    def _mock_gogs_env(self):
+        return patch.dict("os.environ", {"KOAN_GOGS_HOST": "https://git.example.com"})
+
+    def test_gogs_pr_queues_both_missions(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch("app.utils.insert_pending_mission") as mock_insert:
+            result = handler.handle(ctx)
+            assert mock_insert.call_count == 2
+            entries = [mock_insert.call_args_list[i][0][1] for i in range(2)]
+            assert any("/review" in e for e in entries)
+            assert any("/rebase" in e for e in entries)
+
+    def test_gogs_pr_returns_combo_ack(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch("app.utils.insert_pending_mission"):
+            result = handler.handle(ctx)
+            assert "Review + rebase combo queued" in result
+            assert "Gogs PR #7" in result
+            assert "alice/myrepo" in result
+
+    def test_gogs_pr_duplicate_both_returns_warning(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value="/home/koan"), \
+             patch("app.utils.get_known_projects", return_value=[("myrepo", "/home/koan")]), \
+             patch("app.utils.insert_pending_mission", return_value=False):
+            result = handler.handle(ctx)
+            assert "⚠️" in result
+            assert "already queued" in result
+
+    def test_gogs_unknown_repo_returns_error(self, handler, ctx):
+        ctx.args = self.GOGS_URL
+        with self._mock_gogs_env(), \
+             patch("app.utils.resolve_project_path", return_value=None), \
+             patch("app.utils.get_known_projects", return_value=[("koan", "/path")]):
+            result = handler.handle(ctx)
+            assert "❌" in result
