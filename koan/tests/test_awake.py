@@ -1544,6 +1544,78 @@ class TestMainLoop:
             main()
         mock_handle.assert_not_called()
 
+    # -- Non-Telegram provider regressions (matrix/slack/discord) ------------
+    #
+    # These providers leave CHAT_ID unset and match on the resolved
+    # channel_id (e.g. a matrix room id). The main loop must not assume the
+    # Telegram update shape, or it crash-loops the bridge on every message.
+
+    MATRIX_ROOM_ID = "!VakERumPJhkcdQphyO:example.org"
+
+    def _matrix_provider_mock(self):
+        """A messaging provider whose channel_id is a matrix room id."""
+        provider = MagicMock()
+        provider.get_provider_name.return_value = "matrix"
+        provider.get_channel_id.return_value = self.MATRIX_ROOM_ID
+        return provider
+
+    @patch("app.awake._check_group_chat_mode")
+    @patch("app.messaging.get_messaging_provider")
+    @patch("app.awake.write_heartbeat")
+    @patch("app.awake._flush_outbox_async")
+    @patch("app.awake.handle_message")
+    @patch("app.awake.get_updates")
+    @patch("app.awake.check_config")
+    @patch("app.awake.CHAT_ID", "")  # matrix leaves CHAT_ID unset
+    @patch("app.awake.time.sleep", side_effect=StopIteration)
+    def test_main_matrix_message_binds_message_id(
+        self, mock_sleep, mock_config, mock_updates, mock_handle, mock_flush,
+        mock_heartbeat, mock_provider, mock_group_check,
+    ):
+        """A matrix message (chat_id matches channel_id but not CHAT_ID) must
+        dispatch without raising UnboundLocalError on message_id. The buggy
+        version bound message_id only inside a `chat_id == CHAT_ID` guard,
+        crashing the bridge on every matrix message → restart → crash-loop."""
+        from app.awake import main
+        mock_provider.return_value = self._matrix_provider_mock()
+        mock_updates.return_value = [
+            {"update_id": 1, "message": {
+                "message_id": "$evt", "text": "/resume",
+                "chat": {"id": self.MATRIX_ROOM_ID}}}
+        ]
+        # Must reach sleep() (StopIteration), not raise UnboundLocalError.
+        with pytest.raises(StopIteration):
+            main()
+        mock_handle.assert_called_once_with("/resume")
+
+    @patch("app.awake._check_group_chat_mode")
+    @patch("app.messaging.get_messaging_provider")
+    @patch("app.awake.write_heartbeat")
+    @patch("app.awake._flush_outbox_async")
+    @patch("app.awake.handle_message")
+    @patch("app.awake.get_updates")
+    @patch("app.awake.check_config")
+    @patch("app.awake.CHAT_ID", "")
+    @patch("app.awake.time.sleep", side_effect=StopIteration)
+    def test_main_update_without_update_id_does_not_crash(
+        self, mock_sleep, mock_config, mock_updates, mock_handle, mock_flush,
+        mock_heartbeat, mock_provider, mock_group_check,
+    ):
+        """An update lacking update_id must not crash the loop. A KeyError here
+        would take down main(), the supervisor would restart the bridge, the
+        same poison message would be re-delivered, and we'd crash-loop forever."""
+        from app.awake import main
+        mock_provider.return_value = self._matrix_provider_mock()
+        mock_updates.return_value = [
+            {"message": {"message_id": "$evt", "text": "hi from matrix",
+                         "chat": {"id": self.MATRIX_ROOM_ID}}}
+        ]
+        with pytest.raises(StopIteration):
+            main()
+        mock_handle.assert_called_once_with("hi from matrix")
+        mock_flush.assert_called_once()
+        mock_heartbeat.assert_called()
+
     @patch("app.awake.write_heartbeat")
     @patch("app.awake._flush_outbox_async")
     @patch("app.awake.handle_message")

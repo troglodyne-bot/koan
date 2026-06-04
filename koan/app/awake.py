@@ -806,7 +806,16 @@ def main():
                 continue
 
             for update in updates:
-                offset = update["update_id"] + 1
+                # Telegram uses update_id for offset-based pagination.
+                # Other providers (matrix, slack, discord) manage their own
+                # cursor internally and may hand us updates that don't carry
+                # this key. Never let a missing/malformed update_id crash the
+                # bridge: a single non-conforming update would otherwise take
+                # down main(), the supervisor would restart us, the same
+                # poison message would be re-delivered, and we'd crash-loop
+                # forever (see logs/awake.log KeyError: 'update_id').
+                if "update_id" in update:
+                    offset = update["update_id"] + 1
 
                 # Handle reaction updates
                 if "message_reaction" in update:
@@ -819,18 +828,22 @@ def main():
                 msg = update.get("message", {})
                 text = msg.get("text", "")
                 chat_id = str(msg.get("chat", {}).get("id", ""))
-
-                if chat_id == CHAT_ID and text:
-                    message_id = msg.get("message_id", 0)
-                    text = _strip_bot_mention_from_text(text, msg)
-
                 # Match against either: (a) the active provider's channel
                 # id (resolved at startup — covers slack/matrix where
                 # CHAT_ID is unset), or (b) CHAT_ID (telegram-only, kept
                 # for backward compat with existing tests that patch it
                 # directly).  For telegram in production the two are the
                 # same value.
+                #
+                # message_id / mention-stripping MUST be derived inside this
+                # block, not a separate `chat_id == CHAT_ID` guard: for matrix
+                # (and any provider where CHAT_ID is unset) chat_id matches
+                # channel_id but never CHAT_ID, so a CHAT_ID-only guard leaves
+                # message_id unbound and set_reply_context() below raises
+                # UnboundLocalError — crashing the bridge on every message.
                 if text and chat_id in (str(channel_id), str(CHAT_ID)):
+                    message_id = msg.get("message_id", 0)
+                    text = _strip_bot_mention_from_text(text, msg)
                     log("chat", f"Received: {text[:60]}")
                     set_reply_context(message_id)
                     try:
