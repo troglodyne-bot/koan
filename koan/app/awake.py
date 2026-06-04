@@ -834,6 +834,13 @@ def main():
                 # for backward compat with existing tests that patch it
                 # directly).  For telegram in production the two are the
                 # same value.
+                #
+                # message_id / mention-stripping MUST be derived inside this
+                # block, not a separate `chat_id == CHAT_ID` guard: for matrix
+                # (and any provider where CHAT_ID is unset) chat_id matches
+                # channel_id but never CHAT_ID, so a CHAT_ID-only guard leaves
+                # message_id unbound and set_reply_context() below raises
+                # UnboundLocalError — crashing the bridge on every message.
                 if text and chat_id in (str(channel_id), str(CHAT_ID)):
                     message_id = msg.get("message_id", 0)
                     text = _strip_bot_mention_from_text(text, msg)
