@@ -124,6 +124,8 @@ class DeepResearch:
 
     def get_open_issues(self, limit: int = 10) -> list[dict]:
         """Fetch open GitHub issues for the project."""
+        if not self._is_github_forge():
+            return []
         try:
             from app.github import run_gh
             output = run_gh(
@@ -146,6 +148,9 @@ class DeepResearch:
         """
         if self._pending_prs is not None:
             return self._pending_prs
+        if not self._is_github_forge():
+            self._pending_prs = []
+            return self._pending_prs
         try:
             from app.github import run_gh
             output = run_gh(
@@ -159,6 +164,22 @@ class DeepResearch:
             print(f"[deep_research] PR fetch failed: {e}", file=sys.stderr)
             self._pending_prs = []
         return self._pending_prs
+
+    def _is_github_forge(self) -> bool:
+        """Return True if this project is on a GitHub forge.
+
+        Gates GitHub-only issue/PR listing (which has no Gogs equivalent in
+        the forge interface) so it degrades quietly on self-hosted forges
+        instead of erroring every analysis run. Returns True on resolution
+        error to preserve GitHub behaviour by default.
+        """
+        try:
+            from app.forge import get_forge
+            return get_forge(self.project_name).name == "github"
+        except Exception as e:
+            print(f"[deep_research] forge resolution failed, assuming GitHub: {e}",
+                  file=sys.stderr)
+            return True
 
     def _build_pr_coverage(self) -> dict:
         """Build a coverage map from open PRs.

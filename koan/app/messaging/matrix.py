@@ -524,7 +524,8 @@ class MatrixProvider(MessagingProvider):
                 return
             try:
                 emojis = sas.get_emoji()
-            except Exception:
+            except Exception as e:
+                print(f"[matrix] sas {tx_id}: get_emoji failed: {e}", file=sys.stderr)
                 emojis = "?"
             print(
                 f"[matrix] sas {tx_id}: auto-confirming emojis {emojis} "
@@ -699,7 +700,8 @@ class MatrixProvider(MessagingProvider):
         try:
             fut = asyncio.run_coroutine_threadsafe(_typing(), self._loop)
             return bool(fut.result(timeout=10))
-        except Exception:
+        except Exception as e:
+            print(f"[matrix] typing indicator failed: {e}", file=sys.stderr)
             return False
 
     # -- HTTP fallback (e2ee=false) ------------------------------------------

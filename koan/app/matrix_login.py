@@ -23,6 +23,7 @@ closes the HTTP session.
 """
 
 import asyncio
+import contextlib
 import os
 import secrets
 import socket
@@ -50,10 +51,8 @@ def _credentials_path() -> Path:
 def _write_credentials(path: Path, device_id: str, access_token: str, pickle_key: str) -> None:
     """Write credentials atomically with 0600 permissions."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
+    with contextlib.suppress(OSError):
         path.parent.chmod(0o700)
-    except OSError:
-        pass
 
     body = (
         "# Written by app.matrix_login — do not edit by hand.\n"
@@ -68,10 +67,8 @@ def _write_credentials(path: Path, device_id: str, access_token: str, pickle_key
         with os.fdopen(fd, "w") as fh:
             fh.write(body)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
     os.replace(tmp, path)
     os.chmod(path, 0o600)

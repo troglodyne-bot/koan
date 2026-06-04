@@ -41,7 +41,7 @@ def handle(ctx):
     parsed = parse.urlparse(url)
     host = parsed.netloc
     if not host:
-        return f"Could not determine hostname of your git server"
+        return "Could not determine hostname of your git server"
 
     if not project_name:
         project_name = repo
@@ -62,7 +62,7 @@ def handle(ctx):
     workspace_dir.mkdir(exist_ok=True)
 
     # Check push access BEFORE cloning — determines setup strategy
-    has_push = _check_push_access_safe(owner, repo)
+    has_push = _check_push_access_safe(host, owner, repo)
 
     if has_push:
         ctx.send_message(
@@ -207,7 +207,9 @@ def _extract_owner_repo(url):
     parsed = parse.urlparse(url)
     host = parsed.netloc
     if not host:
-        return None
+        # Callers unpack the result as ``owner, repo = _extract_owner_repo(...)``,
+        # so always return a 2-tuple — a bare None would raise TypeError.
+        return None, None
 
     m = re.match(
         r"https?://"+re.escape(host)+r"/([a-zA-Z0-9._-]+)/([a-zA-Z0-9._-]+?)(?:\.git)?$",
